@@ -58,10 +58,21 @@
 - 怎么解决：镜像里装 Mozilla 官方 APT 源的 deb 版 Firefox（加源、密钥、pin）；首启后由一次性服务在 seeding 完成后执行 `snap remove --purge firefox`，并确认 deb 版已存在才动手；收藏栏改指向 deb 版。
 - 适用范围：Ubuntu 22.04 之后；2026。
 
-### snap 挂载失败或 snap-confine 缺能力
-- 原因：内核缺 SquashFS XZ/LZO/xattr；普通用户解包 squashfs 丢扩展属性和设备节点；`security.capability` 丢失。
-- 怎么解决：补内核配置；用 root 和保留 xattr 的工具解包；在真实文件上检查能力位。
+### snap 挂载失败、snap-confine 缺能力，或 AppArmor 显示 partial
+- 原因：内核缺 SquashFS XZ/LZO/xattr；普通用户解包 squashfs 丢扩展属性和设备节点；`security.capability` 丢失；新内核导出的 AppArmor 特征名（例如 `network_v8`）旧版 snapd 不认识，于是判 partial。
+- 怎么解决：补内核配置；用 root 和保留 xattr 的工具解包；在真实文件上检查能力位；核对实际运行的 snapd（含 re-exec 的版本）和内核的特征 ABI。不要靠改状态字符串宣称 strict；AppArmor 的问题和图形库发现是两层。
 - 适用范围：Ubuntu；2026。
+
+### 升级期间服务报 `226/NAMESPACE`
+- 原因：服务在提供配置的包完成配置之前启动，要绑定挂载的配置还停在 `.dpkg-new`。
+- 怎么解决：让配置真正就位后再启动消费它的服务；用真实的旧版升级和首次启动验证，手动 restart 后正常不算。
+- 适用范围：跨包配置或 bind mount 的部署；通用。
+
+### 系统工具和以前不一样（Ubuntu 26.04）
+- coreutils 换成了 uutils：个别参数行为不同（例如 `dd oflag=direct`）。
+- tuned-ppd 取代 power-profiles-daemon：没有 `powerprofilesctl`，脚本经 D-Bus 的 `net.hadess.PowerProfiles` 切换。
+- 测试工具崩溃会在 `/var/crash` 留下 apport 报告，用户随后看到崩溃提示：清理时按报告时间只删自己的。
+- 适用范围：Ubuntu 26.04；2026。
 
 ### 在 QEMU 里测试 snap 行为的结论不能外推到真机
 - 原因：TCG 下 snapd 的操作经常超时并回滚事务。
@@ -79,15 +90,11 @@
 - 怎么解决：drop-in 在 `console-setup` 之前清理非法值。
 - 适用范围：Ubuntu 26.04；2026。
 
-### 首次设置向导覆盖主机名
-- 原因：向导总是把用户名写进计算机名。
-- 怎么解决：设置 pretty hostname（蓝牙名用它）；文档提醒用户在向导里修改。
-- 适用范围：GNOME；2026。
-
-### 系统语言仍是英文
-- 原因：向导只设置用户语言。
-- 怎么解决：需要时设置 `/etc/default/locale` 并预装语言包。
-- 适用范围：Ubuntu；2026。
+### 首次设置向导和"关于"页的几个小问题
+- 向导总是把用户名写进计算机名：设置 pretty hostname（蓝牙名用它），文档提醒用户在向导里修改。
+- 向导只设置用户语言，系统语言仍是英文：需要时设置 `/etc/default/locale` 并预装语言包。
+- "关于"页只显示根分区，用户以为 home 只有几十 GB：文档说明。
+- 适用范围：GNOME、Ubuntu；2026。
 
 ### 电源键行为不符合平板习惯
 - 现象：短按弹出关机对话框，60 秒后自动关机；或默认挂起而挂起还没实现。
@@ -120,11 +127,6 @@
 - 怎么解决：构建结束时清理 `/var/lib/apt/lists`；文档写"先 `sudo apt update`"。
 - 适用范围：通用。
 
-### 用户误以为 home 只有 60 GB
-- 原因：GNOME"关于"页只显示根分区。
-- 怎么解决：文档说明。
-- 适用范围：GNOME；2026。
-
 ### `/usr/local/sbin` 里的旧脚本遮住了包里的新版本
 - 怎么解决：不要在设备上手放脚本；全部走包。
 - 适用范围：通用。
@@ -149,11 +151,24 @@
 - 适用范围：通用。
 
 ### 锁屏后十几秒按键没有反应
-- 现象：按电源键锁屏挂起，偶尔要等约 30 秒才真正挂起，期间按键被忽略。
-- 原因：gnome-shell 持有的睡眠延迟锁偶发不释放，logind 等到 `InhibitDelayMaxSec` 才强制挂起；这个上限被 unattended-upgrades 的配置设为 30 秒。具体是哪个锁残留未定位。
-- 怎么确认：被动采集 `ListInhibitors` 和 Shell 主线程等待点；睡眠时长按墙上时间看。
-- 怎么解决：定位残留锁后在上游或发行版层修；不要靠调低 `InhibitDelayMaxSec` 掩盖。
+- 现象：按电源键锁屏挂起，或合盖挂起，偶尔要等约 30 秒才真正挂起，期间按键被忽略。
+- 原因：gnome-shell 持有的睡眠延迟锁不释放，logind 等到 `InhibitDelayMaxSec` 才强制挂起；这个上限被 unattended-upgrades 的配置设为 30 秒。已确认的一种触发：合盖时键盘盖碰到屏幕，触摸打断了锁屏（见 `touch-and-input.md`）；其他触发方式可能仍未定位。
+- 怎么确认：被动采集 `ListInhibitors` 和 Shell 主线程等待点；睡眠时长按墙上时间看；单独注入合盖事件和"合盖加触摸"分别测。
+- 怎么解决：定位残留锁的来源后修来源；不要靠调低 `InhibitDelayMaxSec` 掩盖。
 - 适用范围：GNOME 50、Ubuntu 26.04；2026。
+
+### 插电合盖后屏幕过一会儿又亮了
+- 现象：日志里 `The system will suspend now!` 之后是 `Device or resource busy`；屏幕先熄，随后仍锁着但重新亮起。
+- 原因：logind 已经广播 `PrepareForSleep(true)`，挂起被驱动拒绝（例如"插电不睡"的电池保护、充电交接），随后的 false 被 GNOME 当成一次唤醒，重新打开显示器。
+- 怎么解决：产品策略是"接外电时只锁屏"就在发起挂起之前表达：logind `HandleLidSwitchExternalPower=lock`；不要靠内核拒绝来实现日常的桌面策略。菜单里的显式挂起和用电池时的合盖分别验证。
+- 适用范围：logind + GNOME；2026。
+
+### Android 容器（Waydroid 一类）起不来或缺功能
+- 容器启动即退出、`boringssl_self_test32` 返回 127：CPU 不支持 AArch32，镜像却带着 32 位组件。选纯 ARM64 的系统和 vendor 镜像。
+- 有地址但缺路由或流量功能（`Couldn't find match 'policy'`、`create PF_KEY socket failed`）：宿主内核缺 netd 用到的接口。按实际镜像补 Binder/binderfs、两族策略路由、legacy iptables 的各张表、XFRM/PF_KEY；`quota2` 一类主线没有的功能另记限制。
+- 宿主 GPU 正常、容器的 SurfaceFlinger 反复崩溃（`fd_pipe_new2: unsupported GPU id`）：容器加载自己的旧 Mesa。先用软件路径隔离（`gralloc=default`、`egl=swiftshader`），硬件加速要更新容器里的图形提供者；软件出图不能记成硬件加速通过。
+- 首次启动系统界面反复崩溃、堆栈在框架里对空列表调 iterator：镜像缺一个上游的判空修复，不要去调宿主的驱动或超时。
+- 适用范围：Waydroid + 主线 ARM64；2026。
 
 ### 应用商店中文全是方块
 - 原因：镜像自带的 snap-store 版本里，ARM64 Flutter 引擎没有系统字体回退，上游已修。

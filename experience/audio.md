@@ -81,18 +81,27 @@
 - 怎么解决：PipeWire 配置开启上混（例如 `channelmix.upmix`）。
 - 适用范围：四扬声器；2026。
 
-### 全新安装只有 "Dummy Output"
+### 全新安装只有 "Dummy Output"，或加一个输出后麦克风一起消失
 标记：【高频】
-- 现象：开发机正常，新用户装完没有声音设备。
-- 原因：采集前端的路由写在 UCM 的 device 段而不是 verb 段，PipeWire 探测时打开所有 PCM，采集端打不开导致整个 profile 不可用；开发机因为保存过 ALSA 状态而看不出来。设置一个不存在的控件也会中断整条序列。
-- 怎么解决：前端路由放进 verb；每条控件设置用 `ControlExists` 保护。
-- 提前预防：UCM 和所有依赖保存状态的功能，都在没有 `/var/lib/alsa/asound.state` 的全新系统上验收。
+- 现象：开发机正常，新用户装完没有声音设备；或者新增一个默认输出、接上外接显示音频后，只剩 `off`/`pro-audio`，HiFi profile 连同麦克风消失，内核报 `no backend DAIs enabled`。
+- 原因：PipeWire（ACP）先设置 verb、立刻打开全部设备的 PCM 做探测，之后才执行设备段的 EnableSequence；FE→BE 路由如果写在设备段，探测时 PCM 打不开，一个 PCM 失败就丢掉整个 profile。开发机因为保存过 ALSA 状态，或手动 `alsaucm` 留下过路由，看不出来。设置一个不存在的控件也会中断整条序列。
+- 怎么解决：探测需要的路由放进 verb 的 EnableSequence；每条控件设置用 `ControlExists` 保护；默认 verb 不包含未验证的输出。
+- 提前预防：UCM 和所有依赖保存状态的功能，都在没有 `/var/lib/alsa/asound.state` 的全新系统上验收；首次会话、关掉扬声器后麦克风是否还在、挂起后录放各测一次。
 - 适用范围：UCM + PipeWire；通用。
 
-### 外接显示音频让整张声卡的内置麦克风消失
-- 原因：同一 profile 里一个输出打开失败，PipeWire 丢弃整个 profile。
-- 怎么解决：默认 verb 不包含未验证的外接显示输出。
-- 适用范围：PipeWire；2026。
+### 只做 prepare 的录音设备探测，偶发让 DSP 整体停止响应
+标记：【耗时】
+- 现象：开机或登录后偶发所有音频请求超时，随后触控、电量计、UFS、GPU 也出现秒级反复停顿（扩散机制见 `kernel-and-resources.md` 的时钟框架全局锁条目）。
+- 原因：录音前端在 PCM prepare 阶段就启动了 DSP 的处理图并排入一批 READ；PipeWire/WirePlumber 探测录音设备时只 prepare、不 start，约 1 ms 后就拆图。"刚启动、READ 在途即拆除"这个真实使用中不该出现的序列让 DSP 的音频通道停住。
+- 怎么确认：分层取证，每轮只回答一个问题、首个超时就停：GPR 收发 → GLINK 事件 → 处理图身份 → 锁持有者；每轮核对探针丢失为零，阴性结论才算数。修复改了顺序、故障只是换个位置出现，说明顺序不是触发因素。
+- 怎么解决：让驱动对齐 ALSA 语义（prepare 不等于 start）：录音图保持 PREPARED，到 trigger START 才启动并排 READ，启动和首批 READ 的错误向上传。不加重试、延时或 DSP 复位。
+- 适用范围：高通 AudioReach q6apm；2026。
+
+### 不放音也到不了最深待机：音频宏驱动常驻持有远端投票
+- 现象：s2idle 时长正常，但 SoC 的 CX 塌缩计数不增长；Linux 侧 RPMh trace 看不到阻塞的票。
+- 原因：LPASS 的宏驱动从 probe 起就 prepare 投票时钟，票经 PRM 记在 ADSP 一侧，闲置时也不释放。
+- 怎么解决：采用上游的 runtime PM 生命周期，让闲置的宏释放投票；用 CX 驻留和唤醒后的录放验证。释放投票之前先满足平台前提（例如缓存控制器分片表正确，见 `power-and-time.md`）。不要从"声卡在、没有播放进程"推定没有音频票。
+- 适用范围：高通 LPASS + AudioReach；2026。
 
 ### 麦克风读不到数据，所有组合都失败
 标记：【耗时】
@@ -134,8 +143,12 @@
 - 做法：给出数值链（寄存器值、dB、功率倍数）和风险，由用户决定；不要照搬其他设备在有保护时的增益。
 - 适用范围：多功放平板；2026。
 
+### 小知识
+- AudioReach 的部分 mixer 控件写 `on,on` 读回 `on,off` 是正常的（只实现了第一个值）。
+- WirePlumber 不会链接没有角色属性的裸测试流：用 `pipewiresrc` 等测试时补上 `media.type`、`media.category`、`media.role`。
+
 ## 未解决
 
 - 主线没有 ADSP 扬声器保护模块，音量上限受限。
 - 启动阶段偶发的功放上电错误是否无害。
-- 音频服务（WirePlumber）崩溃后，ADSP 的 APM/PRM 请求不再响应，只能重启恢复。
+- 投票时钟在全局 `prepare_lock` 里同步等远端的结构问题：触发序列已修，扩散路径仍在。

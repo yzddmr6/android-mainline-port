@@ -2,7 +2,7 @@
 
 A handbook and experience library for porting mainline Linux and a desktop distribution to Android phones and tablets, packaged as an Agent Skill. Claude Code, Codex, Cursor, Gemini CLI and other AI coding agents can use it directly, and people can read it as is. [中文](README.md)
 
-The experience comes from three complete Qualcomm tablet ports, each taken from nothing to a public release (mainline kernel 6.17 to 7.2, Ubuntu 26.04 + GNOME). The goal is simple: when you port the next device from scratch, get there as fast as possible with as few detours as possible.
+The experience comes from three complete Qualcomm tablet ports, each taken from nothing to a public release (mainline kernel 6.17 to 7.4, Ubuntu 26.04 + GNOME). The goal is simple: when you port the next device from scratch, get there as fast as possible with as few detours as possible.
 
 ## Source projects
 
@@ -33,9 +33,10 @@ Long-form technical articles, write-ups and progress updates are on the WeChat o
 
 - **Assessing a new device**: whether it can be ported, which route to take, how long it will take, and which decisions the owner has to make.
 - **Following a process**: project setup, build environment, evidence collection and backup, first boot, first light and a RAM desktop, installing to storage, peripherals one at a time, release and maintenance — each step says what to do and when it counts as done.
-- **Technical decisions**: about 40 key decision points, each with a default, "if this happens, do that" rules, the mechanism behind them, and where they do not apply.
-- **Debugging**: nine common problem patterns with generic steps, then concrete pitfalls by area; error strings, function names and config options in your logs can be searched directly.
+- **Technical decisions**: more than 40 key decision points, each with a default, "if this happens, do that" rules, the mechanism behind them, and where they do not apply — including how to compare two implementation routes, moving to a new kernel generation or sharing one kernel tree across devices, and how to take community contributions.
+- **Debugging**: eleven common problem patterns with generic steps, then concrete pitfalls by area; error strings, function names and config options in your logs can be searched directly.
 - **Taking over midway**: which documents must be kept and how technical debt is recorded, so the next person or agent can continue from the documents alone.
+- **Working with the owner and with AI executors**: which decisions you make yourself and which go to the owner, how to spend as little of the owner's time as possible, and how to brief sub-agents without outsourcing the thinking.
 
 A few lessons that save the most time:
 
@@ -45,6 +46,8 @@ A few lessons that save the most time:
 - Measure sleep duration with wall-clock time only; the monotonic clock used by dmesg and the journal stops while suspended.
 - Size ccache from the measured ~0.3 GB per full kernel build — 10 GB is enough — and set `base_dir`.
 - Every shortcut taken to get something working goes into a single technical-debt register, and gets paid back once the chain works end to end.
+- Search for existing implementations by interface keywords (chip, driver, device node, protocol), not by project name — and do it before you design.
+- Before asking the owner to run a test in person, dry-run everything that can run unattended on the device, in the same order.
 
 ## Install
 
@@ -154,7 +157,7 @@ references/
   ubuntu.md                      Ubuntu layering and decoupling, package split, boot hooks, other distros
 experience/
   README.md                      entry format and maintenance rules
-  patterns.md                    nine problem patterns and generic handling
+  patterns.md                    eleven problem patterns and generic handling
   bootloader-and-boot.md         ABL, boot image formats, first boot, debug channel, recovery
   kernel-and-resources.md        built-in vs modules, resource cleanup, PMIC voltages, DT values
   display.md                     simpledrm and native takeover, DSC, screen off/on, backlight

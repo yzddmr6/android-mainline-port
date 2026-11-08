@@ -2,25 +2,25 @@
 
 这里按领域存放具体经验：推荐路线、完成标准、踩过的坑。外层的流程和方法（`SKILL.md`、`references/`）很少变化；这里随着每个新项目不断追加。
 
-所有经验来自高通平板移植到 **Ubuntu 26.04 + GNOME（Wayland）** 的实际过程，主线内核 6.17 到 7.2。硬件和内核部分基本与发行版无关；用户态部分换发行版时要对照调整，见 `../references/ubuntu.md` 最后一节。
+所有经验来自高通平板移植到 **Ubuntu 26.04 + GNOME（Wayland）** 的实际过程，主线内核 6.17 到 7.4（2026 年）。硬件和内核部分基本与发行版无关；用户态部分换发行版时要对照调整，见 `../references/ubuntu.md` 最后一节。
 
 ## 文件
 
-先看 `patterns.md`：它把下面各文件里的坑抽象成九类问题模式，每类给出怎么认出来和通用处理步骤。
+先看 `patterns.md`：它把下面各文件里的坑抽象成十一类问题模式，每类给出怎么认出来和通用处理步骤。
 
 | 文件 | 范围 |
 |---|---|
 | `bootloader-and-boot.md` | bootloader（高通 ABL）、启动镜像格式、首次启动、调试通道、早期日志、恢复 |
-| `kernel-and-resources.md` | 内建与模块、资源回收与 sync_state、PMIC 电压、设备树数值、串行引擎 |
+| `kernel-and-resources.md` | 内建与模块、资源回收与 sync_state、远端处理器服务、时钟框架锁、pinctrl、失败路径、PMIC 电压、设备树数值 |
 | `display.md` | 借用固件画面（simpledrm）、原生显示接管、DSC、熄屏亮屏、背光、夜灯 |
 | `gpu.md` | Adreno 内核支持、固件、自编 Mesa、新 GPU 的 Mesa 缺陷 |
 | `touch-and-input.md` | 触控（含 TDDI）、按键、键盘配件、手写笔、指纹 |
 | `audio.md` | ADSP/AudioReach、功放、麦克风、UCM、PipeWire、音量 |
 | `wireless.md` | Wi-Fi（ath11k/ath12k）、蓝牙（hci_qca） |
-| `power-and-time.md` | 电量、充电、休眠、RTC 与系统时间、看门狗、温控 |
-| `sensors-camera-media.md` | 传感器与自动旋转、相机、视频硬解 |
+| `power-and-time.md` | 电量、充电与休眠交接、休眠深度、RTC 与系统时间、调频与温控 |
+| `sensors-camera-media.md` | 传感器与自动旋转、相机、视频编解码 |
 | `usb-and-storage.md` | USB/Type-C/外接显示、UFS、分区、双系统、刷写、安装器 |
-| `ubuntu-userspace.md` | Ubuntu 打包、dracut、snap、GNOME 首次设置与桌面默认值 |
+| `ubuntu-userspace.md` | Ubuntu 打包、dracut、snap、GNOME 首次设置与桌面默认值、Android 容器 |
 | `build-and-release.md` | 构建流水线、缓存、可复现性、发布 |
 | `testing-and-process.md` | 判断标准、主机脚本、自动化测试、并行协作、子 agent、与用户配合 |
 
@@ -51,8 +51,9 @@
 
 ## 维护规则
 
+- 只收通用、可推广、持久的内容：一类问题怎么认出来、最早失败层在哪、正确修法和机制、不适用的边界。不写一次事件的经过、次数统计和只对一台设备成立的数值；同一机制的多个事例合成一条。
 - 新问题先搜有没有同类条目。有就补充，没有再新增，放进最相关的文件。
-- 只把确认了根因的写进"坑"。没查清的写进文件末尾的"未解决"，并写明已经排除了什么。
+- 只把确认了根因的写进"坑"。没查清的写进文件末尾的"未解决"，并写明已经排除了什么；查清后移到正文，删掉"未解决"里的那一行。
 - 不写设备型号、序列号、地址、个人信息、项目内部代号和实验编号。芯片型号、驱动名、配置项、错误码可以写，它们是匹配同类问题的关键字。
 - 上游已经修复的问题不要删，在条目末尾加一句"上游已修复：版本或提交"。
 - 推荐路线变了，直接改"推荐路线"一节，并在被取代的条目里注明。

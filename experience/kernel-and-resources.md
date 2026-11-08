@@ -24,7 +24,7 @@
 - 常见受害者（高通）：`QCOM_GPI_DMA`（SPI 触控）、`QRTR`/`QRTR_SMD`/`QCOM_PD_MAPPER`（ADSP 服务）、GPU 时钟控制器（GPU 整条链等待）、`PHY_QCOM_QMP_PCIE` 与 `RFKILL`（Wi-Fi）、`POWER_RESET_QCOM_PON`（电源键和音量键）、`RTC_DRV_PM8XXX`、`NVMEM_REBOOT_MODE` 及 `NVMEM_SPMI_SDAM`、`BATTERY_QCOM_BATTMGR`、`QCOM_CPUCP_MBOX`（没有调频）、Type-C 切换芯片驱动（拖住整个显示驱动）、`OVERLAY_FS`、`SPI_QCOM_GENI`、`FASTRPC`、`SND_SEQUENCER`。
 - 怎么确认：怀疑设备树之前，先看最终 `.config` 的实际值、模块目录是否交付、`lsmod`、`devices_deferred`。
 - 怎么解决：首启阶段把启动和恢复依赖全部 `=y`；尽早建立"版本化完整模块目录"的交付方式；根启动、恢复、显示组件依赖链整链内建。
-- 提前预防：注意 `A depends on B || !B` 的传导：B 是 `=m` 会把 A 也压成 `=m`（例如 RFKILL 把整个无线链变成模块）。
+- 提前预防：注意 `A depends on B || !B` 的传导：B 是 `=m` 会把 A 也压成 `=m`（例如 RFKILL 把整个无线链变成模块）。配置片段合并时后面的覆盖前面的：共用片段放在板级片段之前；遇到 `y/m` 冲突时满足依赖，不要用关掉依赖的办法解决（例如为了让某个驱动能内建而关掉 LLCC，产品会静默少一块性能）。每次合并后看最终 `.config` 和依赖闭包。
 - 适用范围：通用；高通符号写于 2026。
 
 ### 固件仍在用的资源没有消费者，被内核回收
@@ -51,6 +51,46 @@
 - 原因：部分提供者不加载，部分 sync_state 永远挂起，系统处在一个从未验证过的中间状态。
 - 怎么解决：不要这样做。裁剪只用于诊断，用完恢复完整模块目录；资源需求写进真正的消费者。
 - 适用范围：通用。
+
+### 远端处理器已经运行，服务却整组缺失
+标记：【高频】【耗时】
+- 现象：ADSP 已 up，但整次开机没有声卡、传感器、Type-C 或充电服务；或 probe 固定报 `CMD timeout for [...] opcode`；概率很低（几十次开机一次）。
+- 原因（已确认的几种窗口）：rpmsg 端点在驱动 probe 之前就建立，GLINK 在端点回调为空或回调返回 `-EAGAIN` 时直接丢掉消息（SMD 会保留，QRTR 的 `-EAGAIN` 约定是按 SMD 写的），ADSP 的第一个 QRTR HELLO 就这样丢了，而名字服务只回应、不重发；APR 在服务 probe 返回之后才装 GPR 回调，probe 里发出的请求收不到回复；2026 年 7.3 早期候选版加入的 QRTR HELLO 门禁会丢掉服务公告，需要上游的配套修复。
+- 怎么确认：看 QRTR 服务表（远端节点的服务列表），不要看进程或驱动是否 active；"没有 PDR indication"也不能证明保护域没起来（晚注册的监听者本来就收不到）。在丢包点打日志；用 probe 延时把窗口放大到必现，修复版在同样条件下验证。
+- 怎么解决：请求发出前先装好回调；端点暂时接不住的完整消息按序暂存，投递成功后才归还 intent；不要用启动延时、重试或自动重启远端处理器代替消息所有权的修复。
+- 适用范围：高通 GLINK/QRTR/APR；2026。
+
+### 时钟框架的全局锁被远端或 runtime PM 卡住，整机反复停顿或开机挂死
+标记：【耗时】
+- 现象一：一次 DSP 失联后，触控、电量计、UFS、GPU 一起出现秒级反复停顿。原因：时钟 provider 在 `.prepare` 里做远端同步 RPC（例如音频的投票时钟经 PRM，每次最多等几秒），持着 CCF 全局 `prepare_lock`，所有时钟用户都在排队。
+- 现象二：启用某个显示外设节点后开机挂死，加几行日志就好。原因：provider 注册时的孤儿重挂接持着 `prepare_lock` 去 runtime resume 一个正处在挂起/恢复转换中的 provider，而转换回调本身要拿 `prepare_lock`；这种等待边不在 lockdep 里。
+- 怎么确认：抓 `clk_prepare_lock` 的等待栈；锁的问题要量"谁持有"（取锁返回处挂 kretprobe 与解锁配对），不是量"谁在等"；剥离调试信息的内核上用 kprobe 前先反汇编核对参数偏移。
+- 怎么解决：现象二按上游在审系列把 runtime PM 引用挪到取锁之前，原样导入；现象一的结构修复是让真正依赖 DSP 的消费者在锁外完成资源事务。不要缩短超时、加延时或常开时钟。
+- 适用范围：CCF + runtime PM；高通 AudioReach 的投票时钟；2026。
+
+### 默认 pinctrl 状态里有一个脚归别的执行环境，整组配置都没写下去
+- 现象：几路 ADC 温度同时偏高，驱动 probe 成功；日志里有 `disallowed SPMI write`，`Error applying setting, reverse things back` 只在调试级别出现。
+- 原因：pinctrl 应用一个状态时先对全部脚做 mux、再统一写 conf；一个脚的写权限属于别的执行环境，mux 阶段被 SPMI 仲裁拒绝，整个状态作废，其余脚的高阻配置一个也没写；这个失败在 probe 路径上被降级成 `dev_dbg`。原厂能用，可能只是因为没有 mux、坏脚排在最后。
+- 怎么确认：SPMI 地址能直接解码：sid 对应 PMIC，基址加偏移对应外设，低字节是寄存器；`disallowed SPMI write` 表示该外设的写权限归别的 EE。按 PMIC、信号路径给异常通道分组，"同样走 GPIO 却正常的那一路"往往就是被拒的脚。
+- 怎么解决：Linux 无权写、固件已经配好的脚，不写进 Linux 的 pin state；合并或改写原厂状态前确认有没有引入 mux。带模拟输入的通道，验收要有事先登记的合理范围，并读回 pinconf。
+- 适用范围：高通 SPMI PMIC；通用 pinctrl 语义；2026。
+
+### 失败路径和重复释放破坏下一次的引用状态
+- 现象：`-EPROBE_DEFER` 之后重复 `put_device()`；`clk_set_parent()`、PM get、`phy_power_on()` 的失败被后面的成功返回值覆盖；失败清理对没取到的 PHY 也 power-off，计数变负，之后的 power-on 跳过了真实上电。正常开关都通过，问题只在某次失败之后出现。
+- 怎么解决：最早的错误立即传播；每个引用只有一个释放者；用 `pm_runtime_resume_and_get()`，按这次实际取得的资源逆序回收；"已注册"之类的状态只在成功后置位。错误路径要单独做失败注入测试。
+- 适用范围：设备模型、runtime PM、PHY、时钟的失败路径；通用。
+
+### 设备已经 active 才补建的 runtime PM 依赖，没有给供应者加初始引用
+- 现象：开机后耳机检测一类的读取报 `ASoC error (-16): at soc_component_read_no_lock()`，错误码还被当成状态位解析。
+- 原因：聚合设备仍在使用，供应者（持有 regmap 的那个组件）却自动挂起，regmap 进入 cache-only，易失寄存器读返回 `-EBUSY`。依赖链接是在消费者已经 active 之后才建的，没有取得初始的供应者引用。
+- 怎么解决：先建依赖链接再激活聚合设备，bind 期间持引用；对已经 active 的链接补取初始引用，失败和 unbind 时成对释放。延长 autosuspend、限速日志都不是修复。缩短 autosuspend 可以把它变成必现，用来验证。
+- 适用范围：组件聚合 + runtime PM；2026。
+
+### 换新内核后旧设备树里一直没被用到的属性开始生效
+- 现象：升级内核后挂起立刻被唤醒（例如 PCIe 根端口的 wakeup），旧内核一直正常。
+- 原因：新内核开始消费一个旧设备树里早就写着、但从没被用过的属性（例如 `wake-gpios`），而它的极性是错的。
+- 怎么解决：核对规范和实际接线修正设备树；不能因为旧版长期运行就认为设备树的值是对的。
+- 适用范围：内核换代；通用。
 
 ### 黑名单被依赖加载绕过
 - 现象：已加入黑名单的旧驱动仍然被加载。
@@ -97,8 +137,8 @@
 
 ### 读调试接口本身改变了系统状态
 - 现象：加了只读采集后问题消失或出现新问题。
-- 原因：读 `clk_summary` 会唤醒某些子系统；`cat` 某些 sysfs 会触发多次总线传输；读已断电模块的寄存器会挂死。
-- 怎么解决：观测前确认副作用；对照组加同样的采集代码；运行时电源相关的读取要先持有电源引用。
+- 原因：读 `clk_summary` 会 runtime resume 全部提供者；`cat` 某些 sysfs 会触发多次总线传输；读已断电模块的寄存器会挂死。
+- 怎么解决：观测前确认副作用；单个时钟的计数读 `/sys/kernel/debug/clk/<name>/clk_enable_count`、`clk_prepare_count`；对照组加同样的采集代码；运行时电源相关的读取要先持有电源引用。
 - 适用范围：通用。
 
 ### 反编译设备树时，整数被显示成 phandle 标签
@@ -124,4 +164,4 @@
 
 ## 未解决
 
-- 早期调试参数（`keep_bootcon`、`initcall_debug`、`ignore_loglevel`）为什么会影响面板点亮时序：有项目至今带着它们发布，二分镜像建好但没跑。
+- 早期调试参数（`keep_bootcon`、`initcall_debug`、`ignore_loglevel`）为什么会影响面板点亮时序：机制未查明，发布前要么二分清楚，要么登记技术债。

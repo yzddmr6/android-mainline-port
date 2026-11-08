@@ -57,8 +57,8 @@
 标记：【高频】
 - 现象：`systemd-detect-virt` 输出 `vm-other`，`hostnamectl` 的 Chassis 是 `vm`；登录界面短按电源键关机；GNOME 设置里没有电源键选项；带 `ConditionVirtualization=no` 的服务被跳过。
 - 原因：ABL 注入 `/hypervisor`（Gunyah）节点，systemd 据此判定虚拟化。
-- 怎么解决：在 systemd 判定前遮住该节点（initramfs 里或 sysinit 早期用空目录 bind-mount 覆盖 `/sys/firmware/devicetree/base/hypervisor`），或在内核侧不暴露；同时设 Chassis 为 tablet。
-- 提前预防：首启检查清单里固定检查 `systemd-detect-virt` 和 Chassis。
+- 怎么解决：在 systemd 判定前遮住用户态看到的那份节点（initramfs 里或 sysinit 早期用空目录 bind-mount 覆盖 `/sys/firmware/devicetree/base/hypervisor`）；不要从内核的设备树里删掉它，以后要用 hypervisor 的虚拟机管理接口时内核还需要这些数据。Chassis 按桌面策略设（见 `../references/ubuntu.md`）。
+- 提前预防：首启检查清单里固定检查 `systemd-detect-virt`、Chassis，以及遮罩是否在 initramfs 和按需加载的模块之前生效。
 - 适用范围：高通 SM8450 之后带 Gunyah 的平台；2026。
 
 ### 内核命令行来自设备树 `/chosen/bootargs`，而且有长度上限，超长部分被静默截断
@@ -90,9 +90,10 @@
 - 适用范围：高通 ABL；2026。
 
 ### 用候选内核测试已安装的系统，不要直接装包
-标记：【致命】
-- 现象：直接 `dpkg -i` 候选内核包，钩子重建启动镜像集并写入活动槽，候选有问题时设备反复重启，无人在场就无法恢复。
-- 怎么解决：在设备上 `dpkg-deb -x` 解出模块目录，`depmod`，在设备上 `dracut --kver` 生成 initramfs（不写槽）；取回内核、设备树（核对身份）、initramfs，用 v2 格式打 RAM 镜像，命令行加 `softlockup_panic=1 hung_task_panic=1 oops=panic`、`panic=N`，让挂死变成重启回已安装系统；`fastboot boot` 后先设好定时重启再测试；结束后删除暂存的文件。RAM 测试通过后才走正式升级路径持久安装。
+标记：【高频】【致命】
+- 现象：直接 `dpkg -i` 候选内核包，钩子重建启动镜像集并写入活动槽；候选有问题时设备反复重启。更糟的组合：GPU 挂死（`timeout waiting for GMU OOB set GPU_SET`）后发出普通 `reboot`，关机卡在 DRM 收尾，USB 通道已断，回退槽又在之前重装同版本包时被换成了同一个候选，设备只能等人长按电源键。
+- 怎么解决：在设备上 `dpkg-deb -x` 解出模块目录，`depmod`，在设备上 `dracut --kver` 生成 initramfs（不写槽；设备上的 dracut 可能没有 `--kconfig`，配置放 `/lib/modules/<rel>/config`）；取回内核、设备树（核对身份）、initramfs，用 v2 格式打 RAM 镜像，命令行加 `softlockup_panic=1 hung_task_panic=1 oops=panic`、`panic=N`，让挂死变成重启回已安装系统；回程机制随镜像生效；结束后删除暂存的文件。RAM 测试通过后才走正式升级路径持久安装。强制重启的写法见 `../references/decisions.md` 的"候选内核的测试方式"。
+- 提前预防：`panic_on_oops` 只是 sysctl，命令行要写 `oops=panic`；`hung_task_panic`、`softlockup_panic` 要内核编进对应检测器才存在，上机前确认 `/proc/sys/kernel/hung_task_panic` 存在。这些约束写进每一份设备任务说明。
 - 适用范围：自管启动镜像的设备；2026。
 
 ### Fastboot 长时间空闲，或后台仍在写数据时，`fastboot boot` 卡住、设备不再应答
@@ -130,9 +131,9 @@
 - 适用范围：高通 GKI 设备；2026。
 
 ### switch_root 交接时的连锁问题
-- 现象：telnet 接受连接后立刻断开；端口被占用；网卡名变成 `enx*`；固件请求在新根里失败；桌面运行一段时间后被旧看门狗杀掉。
-- 原因：initramfs 的孤儿进程仍占着端口；udev 给 USB 网卡改名；预建的 `/dev/console` 让条件挂载 devtmpfs 被跳过，没有 `/dev/ptmx`；固件只放在 initramfs；initramfs 的计时器没有撤销。
-- 怎么解决：切根前结束旧进程、在新根内重建通道；无条件挂载 devtmpfs；用 `.link` 文件按 MAC 固定网卡名；固件放在根文件系统；交接时新旧保护要重叠、旧保护在新保护生效后再撤。
+- 现象：telnet 接受连接后立刻断开；端口被占用；网卡名变成 `enx*`；固件请求在新根里失败，或两个根里都有固件仍偶发 `-2`；桌面运行一段时间后被旧看门狗杀掉。
+- 原因：initramfs 的孤儿进程仍占着端口；udev 给 USB 网卡改名；预建的 `/dev/console` 让条件挂载 devtmpfs 被跳过，没有 `/dev/ptmx`；固件只放在 initramfs；BusyBox `switch_root` 先删 initramfs 再接上新根，异步的固件请求落在中间的空窗；initramfs 的计时器没有撤销。
+- 怎么解决：切根前结束旧进程、在新根内重建通道；无条件挂载 devtmpfs；用 `.link` 文件按 MAC 固定网卡名；固件放在根文件系统，交接期间保证固件路径连续可见（例如先移动新根再 `chroot`）；交接时新旧保护要重叠、旧保护在新保护生效后再撤。
 - 适用范围：自写 initramfs 时通用。
 
 ### 恢复路径本身会卡住
@@ -164,12 +165,20 @@
 - 适用范围：通用。
 
 ### 早期日志不可靠
-- 现象：pstore 内容损坏或为空；内核日志级别被改；PID1 意外退出。
-- 原因：ramoops 地址不是固件保留的安全区；ABL 追加 `loglevel=6`；`console=ttynull` 让某些 init 退出；`console=tty0` 在 initcall 前注销 bootconsole；部分配置下裸 `earlycon` 不生效。
-- 怎么解决：ramoops 用原厂设备树里的固定保留区，没有就用运行时 netconsole；测试环境和真机的控制台参数逐条对比。
+- 现象：pstore 内容损坏或为空；内核日志级别被改；PID1 报 `unable to open an initial console` 后退出；同一系列的另一种内存容量的机型一开机就复位。
+- 原因：ramoops 地址不是固件保留的安全区，或固定地址只在开发机的内存容量下落在 RAM 里；ABL 追加 `loglevel=6`；ABL 追加 `console=ttynull` 而内核没开 `CONFIG_NULL_TTY`；`console=tty0` 在 initcall 前注销 bootconsole；部分配置下裸 `earlycon` 不生效；`/sys/fs/pstore` 为空可能只是 systemd-pstore 已经把文件搬到 `/var/lib/systemd/pstore`。健康系统的受控 panic 下 pstore 也可能损坏。
+- 怎么解决：ramoops 用原厂设备树里的固定保留区，没有就用运行时 netconsole；固定地址的保留区核对每一种受支持的内存容量；测试环境和真机的控制台参数逐条对比；崩溃证据优先从实时通道取，损坏的 pstore 只取完整的行。
 - 适用范围：通用。
+
+### 产品命令行带着串口控制台，错误风暴时外设中断被饿死
+标记：【耗时】
+- 现象：蓝牙 `command 0x202a tx timeout`、`Reading QCA version information failed (-110)`，同时有 `/dev/kmsg buffer overrun` 和大量 printk；控制器随后消失。
+- 原因：legacy 串口控制台在调用者上下文里关中断同步输出，低速串口在错误风暴下长时间占住 CPU，同一 CPU 上的外设中断（例如蓝牙 UART）得不到处理。
+- 怎么确认：`/proc/consoles` 看串口是否是实际生效的控制台；对照外设 IRQ 的 `effective_affinity_list` 和日志时间；用等量日志负载做对照。
+- 怎么解决：产品命令行不带串口控制台，调试时显式打开；同时修掉风暴源。命令行里已有 `console=` 时只删设备树的 `stdout-path` 不起作用。不要靠延长超时或重试掩盖。
+- 适用范围：legacy（非 nbcon）控制台；2026。
 
 ## 未解决
 
-- 早期硬卡死时如何无人值守恢复：现有方案依赖超时重启或人工按键。
+- 早期硬卡死（看门狗还没被武装之前）如何无人值守恢复：现有方案依赖内建硬件看门狗和超时重启，更早的阶段仍要人工按键。
 - Fastboot 长时间空闲后不响应的确切机制。

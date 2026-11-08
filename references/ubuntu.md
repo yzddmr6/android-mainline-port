@@ -39,7 +39,7 @@
 | `<dev>-device-support` | udev 规则、设备服务（触控用户态、充电、槽成功标记）、启动镜像钩子、dracut 模块和配置、`/etc/flash-kernel/machine`、切换工具、调试通道（默认关闭）、polkit 规则 | 设备 + 集成 | 体积小，变化最频繁 |
 | `<dev>-audio`（可并入 device-support） | UCM、ALSA 拓扑文件 | 设备 | |
 | `<dev>-sensors` | 远端处理器 RPC 守护进程、传感器库、替换版 iio-sensor-proxy（`dpkg-divert`） | 设备 | 发行版版本支持后删除 |
-| `<dev>-mesa` | 新 GPU 需要的 Mesa，装在独立前缀，只在 GPU 驱动已加载时启用 | 设备 | 发行版 Mesa 支持后删除 |
+| `<dev>-mesa` | 新 GPU 需要的 Mesa，装在独立前缀，经 `/etc/ld.so.conf.d/` 成为系统默认（不只靠环境变量） | 设备 | 发行版 Mesa 支持后删除 |
 | `<dev>-snap-graphics` | `gpu-2404` 提供者 snap 和自动连接服务 | 桌面 | 只有 snap 发行版需要 |
 | `<dev>-desktop` | GNOME 默认值（gschema override）、`/etc/xdg/monitors.xml` 缩放、电源键行为、chrony 和 fake-hwclock 配置、zram、PipeWire 上混、console-setup 修正、浏览器替换 | 桌面策略 | 换桌面时重写 |
 | `<dev>-debug` | 诊断工具、调试 shell | 可选 | 默认不装 |
@@ -91,7 +91,7 @@ filesystems+=" ext4 "
 
 ## 7. 内核配置对齐发行版
 
-首版前把内核配置与 Ubuntu 通用内核对比，至少补齐：`UHID`、`PSI`、zram、nf_tables 全套、WireGuard、Yama、Landlock、NTFS3、CIFS、ISO9660、dm-crypt、`SND_SEQUENCER`、`FW_LOADER_COMPRESS`、SquashFS XZ/LZO/xattr、FUSE、AppArmor（snap 需要）。每项单独提交，方便回退。
+首版前把内核配置与 Ubuntu 通用内核对比，至少补齐：`UHID`、`PSI`、zram、nf_tables 全套、WireGuard、Yama、Landlock、NTFS3、CIFS、ISO9660、dm-crypt、`SND_SEQUENCER`、`FW_LOADER_COMPRESS`、SquashFS XZ/LZO/xattr、FUSE、AppArmor（snap 需要）。要跑 Waydroid 一类的 Android 容器，还要 Binder、legacy iptables 和 xtables/nftables 兼容、策略路由。按功能做成配置片段，每项单独提交，方便回退。
 
 ## 8. snap 与图形
 
@@ -103,9 +103,11 @@ filesystems+=" ext4 "
 见 `../experience/ubuntu-userspace.md` 的具体条目，要点：
 - 缩放放 `/etc/xdg/monitors.xml`（首次设置向导和 GDM 也读）。
 - 电源键：挂起未完成时设为无动作或保留对话框，logind 忽略；挂起完成后改为熄屏锁屏。
+- 合盖：logind 处理 `SW_LID`；接外部电源时只锁屏（`HandleLidSwitchExternalPower=lock`）。
 - 没有挂起时禁用挂起（`sleep.conf.d`）并把空闲动作设为无。
-- Chassis 设为 tablet，遮蔽 hypervisor 节点。
-- 时间：fake-hwclock + chrony 放宽配置（过渡）。
+- Chassis：遮蔽 hypervisor 节点后系统才不会判成虚拟机；`tablet` 会让 GNOME 隐藏电源键设置，需要这个设置时设 `convertible`（副作用见 `../experience/touch-and-input.md`）。设备身份判断不要依赖 Chassis 的值。
+- 时间：RTC 偏移方案落地前，fake-hwclock + chrony 放宽配置（过渡，见 `decisions.md` 的"系统时间"）。
+- 电源模式：Ubuntu 26.04 用 tuned-ppd 取代 power-profiles-daemon，没有 `powerprofilesctl`，脚本经 D-Bus（`net.hadess.PowerProfiles` 的 `ActiveProfile`）切换。
 - PipeWire 多扬声器上混。
 - 清理首次设置向导写入的非法键盘布局。
 
