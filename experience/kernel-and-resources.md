@@ -55,7 +55,7 @@
 ### 远端处理器已经运行，服务却整组缺失
 标记：【高频】【耗时】
 - 现象：ADSP 已 up，但整次开机没有声卡、传感器、Type-C 或充电服务；或 probe 固定报 `CMD timeout for [...] opcode`；概率很低（几十次开机一次）。
-- 原因（已确认的几种窗口）：rpmsg 端点在驱动 probe 之前就建立，GLINK 在端点回调为空或回调返回 `-EAGAIN` 时直接丢掉消息（SMD 会保留，QRTR 的 `-EAGAIN` 约定是按 SMD 写的），ADSP 的第一个 QRTR HELLO 就这样丢了，而名字服务只回应、不重发；APR 在服务 probe 返回之后才装 GPR 回调，probe 里发出的请求收不到回复；2026 年 7.3 早期候选版加入的 QRTR HELLO 门禁会丢掉服务公告，需要上游的配套修复。
+- 原因（已确认的几种窗口）：rpmsg 端点在驱动 probe 之前就建立，GLINK 在端点回调为空或回调返回 `-EAGAIN` 时直接丢掉消息（SMD 会保留，QRTR 的 `-EAGAIN` 约定是按 SMD 写的），ADSP 的第一个 QRTR HELLO 就这样丢了，而名字服务只回应、不重发；APR 在服务 probe 返回之后才装 GPR 回调，probe 里发出的请求收不到回复；v7.3-rc2 合入的 `544d85de4dc2`（net: qrtr: Send HELLO message on endpoint register）加了一道 HELLO 门禁，远端的 HELLO 先到时，回复和已有的服务公告会被丢掉、之后不再补发（识别点：`qrtr_node_enqueue()` 返回 `-EAGAIN`），需要配套修复 `743b5c86276b`（net: qrtr: announce local services again once our HELLO is sent，2026-11 进入 net 树并抄送 stable）；没有这道门禁的旧树不需要。
 - 怎么确认：看 QRTR 服务表（远端节点的服务列表），不要看进程或驱动是否 active；"没有 PDR indication"也不能证明保护域没起来（晚注册的监听者本来就收不到）。在丢包点打日志；用 probe 延时把窗口放大到必现，修复版在同样条件下验证。
 - 怎么解决：请求发出前先装好回调；端点暂时接不住的完整消息按序暂存，投递成功后才归还 intent；不要用启动延时、重试或自动重启远端处理器代替消息所有权的修复。
 - 适用范围：高通 GLINK/QRTR/APR；2026。
