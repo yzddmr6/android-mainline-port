@@ -162,6 +162,15 @@
 - 怎么解决：每个打包的内核构建都升一个版本号（ABI），从不复用，见 `ubuntu-userspace.md`。
 - 适用范围：通用。
 
+### 判断驱动编成了什么，要读镜像自带的 `.config`，不要读 `/boot` 里的副本
+标记：【耗时】
+- 现象：按 `/boot/config-<ver>` 认定某个驱动 `is not set`，据此设计"先编成模块再 insmod"的路线；实际镜像里该驱动是 `=y`，开机第一秒就在 probe，整条路线白跑。
+- 原因：`/boot` 里的配置是打包时的副本，可能来自更早的构建、另一套工具链甚至另一个内核版本；真正生效的是编进镜像的那一份。
+- 怎么确认：`scripts/extract-ikconfig <Image 或 Image.gz>` 直接抽镜像内的配置，再与 `/boot` 副本 `diff`；同时对照 dmesg 首行的编译器版本与构建机器名。
+- 怎么解决：一律以 `extract-ikconfig` 的结果为准；构建流水线把最终 `.config`、以及与仓库配置的 `config-drift.diff` 一起作为产物上传。
+- 提前预防：`olddefconfig` 之后配置会漂移（新选项按默认取值），不要假设镜像里的配置等于仓库里那份。
+- 适用范围：通用；2026。
+
 ## 未解决
 
 - 早期调试参数（`keep_bootcon`、`initcall_debug`、`ignore_loglevel`）为什么会影响面板点亮时序：机制未查明，发布前要么二分清楚，要么登记技术债。

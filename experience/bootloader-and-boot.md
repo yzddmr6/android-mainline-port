@@ -178,7 +178,38 @@
 - 怎么解决：产品命令行不带串口控制台，调试时显式打开；同时修掉风暴源。命令行里已有 `console=` 时只删设备树的 `stdout-path` 不起作用。不要靠延长超时或重试掩盖。
 - 适用范围：legacy（非 nbcon）控制台；2026。
 
+### 没有控制台时：把启动检查点写进不挂载的裸分区
+标记：【耗时】
+- 现象：自编内核在启动途中挂死，无屏幕、无串口；重启后 `journal`、`pstore`、`ktap` 里都没有那次启动的任何记录，只能确认"没进 userland"。
+- 原因：挂死发生在内核或 initramfs 里，此时所有依赖 userland 的通道都还不存在——netconsole 需要 initramfs 先把网卡拉起来，pstore 只在 panic 时落盘，`journal` 在根文件系统上；而 `fastboot boot` 是内存启动，挂死时什么分区都没写，证据随断电消失。
+- 怎么确认：在 initramfs 里放一个只依赖 BusyBox 的脚本，把"阶段名 + `/proc/uptime` + `dmesg | tail`"用 `dd` 写进裸分区；重启后从主机侧把同一段读回来。六个阶段都读得回来，即证明通道成立。
+- 怎么解决：
+  - 选一个不参与系统挂载、几百 KB 以上的分区当黑匣子，动手前完整备份。
+  - 每个阶段用固定偏移，互不覆盖；`conv=notrunc` 写完显式 `sync`（initramfs 里的 `dd` 不一定支持 `conv=fsync`）。
+  - 设备节点不要硬编码：遍历 `/sys/class/block/*/uevent` 按 `PARTNAME` 匹配目标分区，节点缺失时用 `/sys/class/block/<name>/dev` 里的 `MAJOR:MINOR` 走 `mknod` 兜底；init-top 阶段 `/dev` 里不一定已经齐全。
+  - 一定把 `uptime` 一起写进去，它能直接暴露耗时黑洞：本项目据此发现 initramfs 里两个 `udevadm settle` 分别吃满 120 秒和 60 秒。
+- 提前预防：调试镜像与正式镜像分开打包，只换 ramdisk，内核与设备树一字不动，避免多个变量混在一起。
+- 适用范围：通用；2026。
+
+### initramfs-tools 只执行各阶段 `ORDER` 里列出的脚本，自建钩子不写进 `ORDER` 就完全不执行
+标记：【致命】【耗时】
+- 现象：把钩子放进 `scripts/init-top/`、`scripts/init-bottom/` 并 `chmod +x`，打包也成功；上机后钩子里的落盘、看门狗、日志全都没有发生，而且没有任何报错。
+- 原因：`run_scripts()` 不遍历目录，它只 `. "${initdir}/ORDER"`，按 `ORDER` 里列出的路径逐个执行。目录里存在但没被 `ORDER` 引用的脚本永远不会跑。
+- 怎么确认：读解包后的 `scripts/functions` 里 `run_scripts()` 的实现；或把同一条钩子先不加、后加进 `ORDER`，对比落盘结果。注意 `ORDER` 与实际文件可能不一致（`local-top/ORDER` 就可能是空文件）。
+- 怎么解决：加脚本时同时改对应阶段的 `ORDER`，每行一条路径，惯例后面再跟一行 `[ -e /conf/param.conf ] && . /conf/param.conf`；需要最先执行的用 `00-` 前缀。
+- 提前预防：改完 initramfs 先解包核对 `ORDER` 再打包；把"钩子会执行"当成需要实证的假设。
+- 适用范围：Debian、Ubuntu 等使用 initramfs-tools 的系统；2026。
+
+### 在 init-bottom 把 dmesg 抄进真实根，卡在交接之后的启动也能留下内核日志
+标记：【耗时】
+- 现象：启动挂死在 initramfs 交接前后，那一次启动的内核日志完全拿不到，只能在下一次启动的日志里看到"没有这一次"。
+- 原因：`init-bottom` 阶段根文件系统已挂到 `${rootmnt}` 且可写，此时写进去的 dmesg 会留在磁盘上；此后交接失败也不影响已经落盘的内容。
+- 怎么确认：挂死并重启后 `/var/log/early-dmesg.txt` 存在，内容从 `Linux version` 开始，最后几条的时间戳等于挂死的时刻。
+- 怎么解决：钩子里 `dmesg > "${rootmnt}/var/log/early-dmesg.txt"`，失败时退回 `${rootmnt}/run/`。文件时间戳可能是 1970 年（此时还没有 RTC 校时），按内容判断是哪一次启动。
+- 提前预防：这份文件每次启动都会被覆盖，读到就立刻取走；不要把它当成本次启动的日志。
+- 适用范围：通用；2026。
+
 ## 未解决
 
-- 早期硬卡死（看门狗还没被武装之前）如何无人值守恢复：现有方案依赖内建硬件看门狗和超时重启，更早的阶段仍要人工按键。
+- 早期硬卡死（看门狗还没被武装之前）如何无人值守恢复：现有方案依赖内建硬件看门狗和超时重启，更早的阶段仍要人工按键。设想是在 init-top 阶段先把 BusyBox 与看门狗脚本拷进 `/run`（交接只删 initramfs，`/run` 会随根目录搬走），再计时重启；实测尚未跑通，先记在这里，避免被当成已验证手段。
 - Fastboot 长时间空闲后不响应的确切机制。
