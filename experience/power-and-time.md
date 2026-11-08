@@ -154,6 +154,51 @@
 - 怎么解决：用墙充；或用厂商提供的充电开关重新启用。等电量时定时读新数值，不要假设一直在充。
 - 适用范围：部分厂商 Android；2026。
 
+### SPMI 寄存器写入漏掉外设基址，写进了另一颗 PMIC 的执行环境
+标记：【致命】
+- 现象：`spmi spmi-0: disallowed SPMI write to sid=2, addr=0x0643` 每秒刷屏；驱动 probe 成功，但寄存器读回不变、功能不生效。
+- 原因：SPMI 地址是 `(APID << 8) | offset`，APID 来自设备树节点的 `reg` 基址。驱动漏加基址时写落到另一个 APID（另一颗 PMIC），pmic-arb 的 `write_ee != ee` 检查直接拒绝，返回 `-EPERM`。
+- 怎么确认：把日志里的地址与设备树 `reg` 相加核对；地址高字节就是 APID，和节点基址的高字节对不上就是漏了基址。
+- 怎么解决：所有寄存器访问统一写 `base + REG`；基址存进驱动结构体，禁止把裸偏移常量直接交给 `regmap_write`。
+- 适用范围：高通 SPMI/PMIC；2026。
+
+### 充电块的看门狗没人喂，充电自己复位，然后整机欠压断电
+标记：【致命】【耗时】
+- 现象：`... Couldn't pet the dog rc=-1`；充电约 30 秒后变成 `Full`/`Not charging`、`current_now=0`；再往后整机硬断电。日志里启动次数很多、干净关机 0 次。
+- 原因：SMB 类充电块带硬件看门狗，靠定期写 `BARK_BITE_WDOG_PET` 续命；写入失败（常见原因就是上一条漏基址）→ 看门狗 bite → 充电块复位 → 停充 → 电池放电到欠压。
+- 怎么确认：dmesg 搜 `pet`/`bite`/`wdog`；"启动计数远大于干净关机次数"能证明断电是掉电而不是 panic。
+- 怎么解决：probe 时先禁用看门狗或立即喂一次，注册 bark 中断并检查每次写入的返回值；只注册中断却不喂狗等于定时炸弹。
+- 提前预防：带看门狗的 PMIC 子块，先处理看门狗再调其它功能；把 bark/bite 的中断和超时值记进状态表。
+- 适用范围：高通 SMB/SMB2/SMB5 类充电块；2026。
+
+### 停充时输入电压读 0，被误判成"没插电"
+标记：【高频】
+- 现象：`usbin_v` 读 0，于是判断线没接好或 VBUS 没电。
+- 原因：充电被禁用时（满电、`Not charging`、看门狗复位后），USB 输入通路关闭，输入电压的 ADC 自然是 0。
+- 怎么确认：看 `ONLINE`/`PRESENT` 与 APSD 结果，别看 `usbin_v`；换口换线做对照。
+- 怎么解决：判断"有没有供电"只用 `ONLINE`/`PRESENT`；`usbin_v` 只在充电进行中有意义。
+- 适用范围：高通 SMB 类充电块；2026。
+
+### 新建的 `charge_behaviour` 属性读出来是 EINVAL
+标记：【高频】
+- 现象：`cat charge_behaviour` 报 `EINVAL`，dmesg 里是 `driver reporting unavailable enum value 1`。
+- 原因：`POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR` 是枚举，power_supply 核在调 `get_property` 之前先查 `desc->charge_behaviours` 位图，没有声明支持的值就直接拒绝。
+- 怎么解决：`desc->charge_behaviours = BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO) | BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE);`
+- 适用范围：通用 power_supply；6.16 及以后；2026。
+
+### 用阈值停充以后，清掉阈值也恢复不了充电
+标记：【高频】
+- 现象：写 `charge_control_end_threshold` 停充正常；把阈值清 0 之后仍然 `Not charging`、电流 0。
+- 原因：停充是主动 inhibit，清阈值只改了判断条件，没有把 `charging enable` 写回去。
+- 怎么解决：清阈值或写 `charge_behaviour=auto` 时统一走同一条"重新使能充电"的路径，并让下一次轮询能自洽；两条恢复路径分别测。
+- 适用范围：自实现的充电控制；2026。
+
+### 枚举 power_supply 找电量计，`power_supply_for_each_device` 没有导出
+- 现象：驱动里用 `power_supply_for_each_device()`，链接时报未定义。
+- 原因：只导出了 `power_supply_for_each_psy()`。
+- 怎么解决：用 `power_supply_for_each_psy()` 遍历，按 `POWER_SUPPLY_TYPE_BATTERY` 且能读到 `CAPACITY` 过滤；记名字而不是指针，`power_supply_put()` 用 `devm_add_action_or_reset()` 托管。
+- 适用范围：linux 6.x；2026。
+
 ## 未解决
 
 - 私有快充的认证与协商：充电功率常低于原厂，认证时机等问题见上面的条目。

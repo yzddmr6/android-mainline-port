@@ -141,6 +141,15 @@
 - 怎么解决：观测前确认副作用；单个时钟的计数读 `/sys/kernel/debug/clk/<name>/clk_enable_count`、`clk_prepare_count`；对照组加同样的采集代码；运行时电源相关的读取要先持有电源引用。
 - 适用范围：通用。
 
+### 调试选项会改结构体布局，按另一份配置编的模块静默写坏内存
+标记：【致命】【耗时】
+- 现象：换自编内核后系统在启动用户态时挂死或几十秒后硬复位，同一份 rootfs 在参考内核上正常；`modprobe` 不报错，`vermagic` 也一致。
+- 原因：`CONFIG_NETCONSOLE` 会选上 `CONFIG_NETPOLL`/`NET_POLL_CONTROLLER`，`struct net_device` 因此多一个字段；按旧配置编出的模块以为结构体更小，写尾部字段时踩到别的对象。`CONFIG_MODVERSIONS` 关闭时只有 `vermagic`（版本与几个配置前缀）参与校验，这种差异检测不到。
+- 怎么确认：用 `scripts/extract-ikconfig` 从设备上正在跑的内核镜像抽出配置，与自编的 `.config` 逐项对比（不要只看版本号）；对可疑结构体用 `pahole` 或 `gdb` 比 `sizeof` 和字段偏移。
+- 怎么解决：以设备上现有模块对应的真实配置为基线重编，或关掉所有会改结构体的调试选项（netconsole、额外的 trace/hook）再编；内核与模块必须来自同一次构建。
+- 提前预防：把"只加调试输出"的选项也当 ABI 变更处理；构建脚本里加一步，目标机上 `extract-ikconfig` 的结果与本地产物 `.config` 不一致就拒绝上机。
+- 适用范围：通用（内建模块 ABI）；2026。
+
 ### 反编译设备树时，整数被显示成 phandle 标签
 - 现象：数值看起来是一个不相关的节点名。
 - 怎么解决：数值只用 `dtc -I dtb -O dts` 的原始输出核对，不用美化工具。
