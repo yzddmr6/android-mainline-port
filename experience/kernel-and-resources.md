@@ -10,7 +10,7 @@
 
 ## 完成标准
 
-- 最终 `.config` 里关键项的实际值正确，且对应 `.ko` 确实在模块目录里、确实被加载。
+- 最终 `.config` 里关键项的实际值正确：`=y` 的确认已内建并实际绑定，`=m` 的确认模块已交付并按需加载。
 - `devices_deferred` 为空或每项可解释。
 - 没有长期挂起的 sync_state；没有 `*_ignore_unused`、`fw_devlink.sync_state=timeout`、屏蔽部分模块之类的全局绕过。
 - 用完整模块集、无黑名单的情况下多次冷启动稳定。
@@ -21,7 +21,7 @@
 标记：【高频】【耗时】
 - 现象：永久 `EPROBE_DEFER`、驱动不绑定、电源键和音量键失效、远端处理器服务不出现、`reboot bootloader` 失效，但没有任何报错。
 - 原因：早期 RAM 镜像只有 Image + DTB + 小 initramfs，没有 `/lib/modules`；后期有模块目录时又出现"提供者一半 `=y` 一半 `=m`"。
-- 常见受害者（高通）：`QCOM_GPI_DMA`（SPI 触控）、`QRTR`/`QRTR_SMD`/`QCOM_PD_MAPPER`（ADSP 服务）、GPU 时钟控制器（GPU 整条链等待）、`PHY_QCOM_QMP_PCIE` 与 `RFKILL`（Wi-Fi）、`POWER_RESET_QCOM_PON`（电源键和音量键）、`RTC_DRV_PM8XXX`、`NVMEM_REBOOT_MODE` 及 `NVMEM_SPMI_SDAM`、`BATTERY_QCOM_BATTMGR`、`QCOM_CPUCP_MBOX`（没有调频）、Type-C 切换芯片驱动（拖住整个显示驱动）、`OVERLAY_FS`、`SPI_QCOM_GENI`、`FASTRPC`、`SND_SEQUENCER`。
+- 常见受害者（高通）：`QCOM_GPI_DMA`（SPI 触控）、`QRTR`/`QRTR_SMD`/`QCOM_PD_MAPPER`（ADSP 服务）、GPU 时钟控制器（GPU 整条链等待）、`PHY_QCOM_QMP_PCIE` 与 `RFKILL`（Wi-Fi）、`POWER_RESET_QCOM_PON`（它创建电源键和音量键的子设备，按键本身还要 `INPUT_PM8941_PWRKEY`）、`RTC_DRV_PM8XXX`、`NVMEM_REBOOT_MODE` 及 `NVMEM_SPMI_SDAM`、`BATTERY_QCOM_BATTMGR`、`QCOM_CPUCP_MBOX`（没有调频）、Type-C 切换芯片驱动（拖住整个显示驱动）、`OVERLAY_FS`、`SPI_QCOM_GENI`、`FASTRPC`、`SND_SEQUENCER`。
 - 怎么确认：怀疑设备树之前，先看最终 `.config` 的实际值、模块目录是否交付、`lsmod`、`devices_deferred`。
 - 怎么解决：首启阶段把启动和恢复依赖全部 `=y`；尽早建立"版本化完整模块目录"的交付方式；根启动、恢复、显示组件依赖链整链内建。
 - 提前预防：注意 `A depends on B || !B` 的传导：B 是 `=m` 会把 A 也压成 `=m`（例如 RFKILL 把整个无线链变成模块）。配置片段合并时后面的覆盖前面的：共用片段放在板级片段之前；遇到 `y/m` 冲突时满足依赖，不要用关掉依赖的办法解决（例如为了让某个驱动能内建而关掉 LLCC，产品会静默少一块性能）。每次合并后看最终 `.config` 和依赖闭包。
@@ -33,7 +33,7 @@
 - 原因：内核在 `late_initcall`（`clk_disable_unused`）和 sync_state（genpd、interconnect、rpmhpd）时关掉没有消费者的资源。固件留下的显示时钟、电源域、总线带宽没有人在设备树里声明在用。
 - 怎么确认：在回收前后各导出一次 `/sys/kernel/debug/clk/clk_summary`、`pm_genpd_summary`、`interconnect_summary` 对比；看哪些在回收后被关掉。
 - 怎么解决：在真正的消费者节点（例如 simple-framebuffer）里声明电源域、时钟、互连路径及带宽；提供者驱动内建并在回收前绑定。
-- 提前预防：不要用 `clk_ignore_unused`、`pd_ignore_unused`、`fw_devlink.sync_state=timeout`、`iommu.passthrough=1` 把问题盖住。它们能让你快速出图，但以后无法省电、无法休眠、无法进上游。可以短时间当诊断手段用来确认"是不是资源回收"，确认后撤掉。
+- 提前预防：不要用 `clk_ignore_unused`、`pd_ignore_unused`、`fw_devlink.sync_state=timeout`、`iommu.passthrough=1` 把问题盖住。它们能让你快速出图，但以后无法省电、无法休眠、无法进上游。前两个可以短时间分别当诊断手段，确认是时钟还是电源域回收，确认后撤掉；后两个改的是依赖同步和 DMA 地址转换，是另外的假设。
 - 适用范围：通用，高通尤其明显；2026。
 
 ### 显示时钟控制器编成模块，出现"慢启动态"
@@ -112,7 +112,7 @@
 - 现象：外设（例如磁吸键盘桥）能枚举但没有数据，查询命令全部超时；修协议层无效。
 - 原因：原厂设备树里某些 LDO 是 always-on，名义消费者是别的子系统（例如显示），主线没有声明，于是总线上拉没电。
 - 怎么确认：读串行控制器的线路状态寄存器和 GPIO 输入电平（注意 pinctrl 调试接口显示的是输出锁存，不是输入）。
-- 怎么解决：把原厂所有 always-on/boot-on 电源与运行时 `regulator_summary` 做差集，补上缺失的。
+- 怎么解决：把原厂所有 always-on/boot-on 电源与运行时 `regulator_summary` 做差集，逐项确认真实的消费者，把供电写进消费者；确实要常开的才保留 always-on。
 - 适用范围：通用方法。
 
 ### 串行引擎的父包装器或 GPI DMA 没启用，控制器不出现
@@ -125,7 +125,7 @@
 ### OPP 返回 `-ERANGE` 后电源投票永久丢失
 - 现象：亮屏或恢复后几十毫秒内整机静默挂死。
 - 原因：为了通过模式校验把时钟上限抬到 OPP 表之外，`dev_pm_opp_set_rate` 返回 `-ERANGE`，关闭后电源域投票归零且不再恢复；运行时恢复先开时钟后投票。
-- 怎么解决：请求频率钳到 OPP 表顶；恢复时先投票再开时钟；不要用临时常持的时钟引用对抗回收。
+- 怎么解决：先修正频率需求的计算；超出合法 OPP 的模式应该被拒绝，只有证明较低频率够用时才把请求钳到 OPP 表顶；恢复时先投票再开时钟；不要用临时常持的时钟引用对抗回收。
 - 提前预防：`-ERANGE`、"找不到 OPP"不是噪声。
 - 适用范围：通用。
 
@@ -153,7 +153,7 @@
 - 适用范围：主线 7.x；2026。
 
 ### 内核配置缺桌面常用项
-- 现象：蓝牙 LE 键鼠不工作（缺 `UHID`）；没有内存压力保护（缺 `PSI`、zram）；防火墙、WireGuard 不可用；`.zst` 压缩固件读不了（缺 `FW_LOADER_COMPRESS`）；snap 挂载失败（缺 SquashFS XZ/LZO/XATTR）；ALSA 钩子要求 `snd-seq`。
+- 现象：蓝牙 LE 键鼠不工作（缺 `UHID`）；没有内存压力保护（缺 `PSI`、zram）；防火墙、WireGuard 不可用；`.zst` 压缩固件读不了（缺 `FW_LOADER_COMPRESS` 和 `FW_LOADER_COMPRESS_ZSTD`）；snap 挂载失败（缺 SquashFS XZ/LZO/XATTR）；ALSA 钩子要求 `snd-seq`。
 - 怎么解决：首版前与发行版通用内核配置逐项对比，按功能单独提交，方便回退。
 - 适用范围：桌面发行版；2026。
 

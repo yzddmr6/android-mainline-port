@@ -43,7 +43,7 @@ A few lessons that save the most time:
 - `fastboot boot` returns OKAY but the device stays in Fastboot: check that the DTB msm-id/board-id match what the bootloader expects, not the image size.
 - Use the firmware framebuffer (simpledrm) only for first light; start the native display takeover early and in parallel — brightness, screen-off, suspend and external displays all depend on it.
 - On Qualcomm, default to s2idle: messages from the remote processors fully wake the system from deep sleep and do not show up as wakeup sources.
-- Measure sleep duration with wall-clock time only; the monotonic clock used by dmesg and the journal stops while suspended.
+- Measure sleep duration with wall-clock time or the change in BOOTTIME minus MONOTONIC across the suspend; the monotonic clock used by dmesg and the journal stops while suspended.
 - Size ccache from the measured ~0.3 GB per full kernel build — 10 GB is enough — and set `base_dir`.
 - Every shortcut taken to get something working goes into a single technical-debt register, and gets paid back once the chain works end to end.
 - Search for existing implementations by interface keywords (chip, driver, device node, protocol), not by project name — and do it before you design.

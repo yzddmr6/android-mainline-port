@@ -60,7 +60,7 @@ Android 设备的启动镜像要由项目自己生成：
 
 - 在 `/etc/kernel/postinst.d/zz-<dev>-boot`、`/etc/kernel/postrm.d/` 和 `/etc/initramfs/post-update.d/` 放钩子：内核或 initramfs 变化时，生成新的启动镜像集（按本机格式），存到切换存储里，并（可选）写入活动槽、读回校验。
 - 保留上一版作为回滚集。
-- 钩子在前置文件（签名密钥、分区映射等）缺失时打印提示并**退出 0**，不写槽、不删除镜像集。任何包更新都可能触发 initramfs 重建（例如用户在首次设置向导里改键盘布局），钩子出错会让 dpkg 半配置。
+- 钩子在前置文件（签名密钥、分区映射等）缺失时打印提示并**退出 0**，不写槽、不删除镜像集：任何包更新都可能触发 initramfs 重建（例如用户在首次设置向导里改键盘布局），钩子出错会让 dpkg 半配置。但在已装好的设备上，要把"包已装、启动镜像未更新"记下来并在自检里报出，不能让升级看起来已经完成。
 - 钩子能识别自己运行在构建 chroot 里，此时不写设备。
 - `/etc/flash-kernel/machine` 写 `none`，关掉发行版自带的启动部署工具。
 
@@ -68,14 +68,14 @@ Android 设备的启动镜像要由项目自己生成：
 
 ```
 # /etc/dracut.conf.d/90-<dev>.conf
-hostonly="no"            # 在 QEMU/chroot 构建时，hostonly 会按构建机挑模块
+hostonly="no"            # 通用模式；在 QEMU/chroot 构建时，hostonly 会按构建机挑模块
 hostonly_cmdline="no"
 add_dracutmodules+=" <dev> "   # 早期需要的设备逻辑（例如 hypervisor 节点遮蔽）
 filesystems+=" ext4 "
 ```
 
 - 启动和恢复需要的驱动必须在内核里或在 initramfs 里；固件在早期就要用的（例如触控、显示）放进 initramfs。
-- `hostonly="no"` 会打包全部模块，体积和生成时间都大：核对启动分区余量（例如 vendor_boot）；生成慢的问题靠"在设备上生成"解决，见 `build-environment.md`。
+- `hostonly="no"` 会打包大量模块，体积和生成时间都大，启动需要的驱动和固件仍要显式列出并检查归档的实际内容：核对启动分区余量（例如 vendor_boot）；生成慢的问题靠"在设备上生成"解决，见 `build-environment.md`。
 - 注意 Ubuntu 的 dracut 用 3cpio，压缩等级参数可能不生效。
 
 另一种选择是自写 BusyBox initramfs（早期调试和恢复更可控，但要自己维护），见 `decisions.md`。
@@ -113,7 +113,7 @@ filesystems+=" ext4 "
 
 ## 10. 调试通道（产品）
 
-- systemd socket 激活的 SSH，绑定固定的 USB 网段地址并 `FreeBind=yes`，用 `IPAddressAllow`/`IPAddressDeny` 只接受 USB 网段；不要用 `BindToDevice`。
+- systemd socket 激活的 SSH，绑定固定的 USB 网段地址并 `FreeBind=yes`，用 `IPAddressAllow`/`IPAddressDeny` 只接受 USB 网段；要严格限定入接口时再加按 `iifname` 过滤的防火墙规则；不要用 `BindToDevice`（开机时网卡还不存在，会形成启动依赖死锁）。
 - 默认关闭，安装时临时开启，命令行或安装参数显式打开；开启状态重启后保持。
 - 冷启动验证开启和关闭两种状态。
 

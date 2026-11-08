@@ -27,7 +27,7 @@
 - 怎么确认：取原厂系统的 `/sys/firmware/fdt` 和自己打包的设备树对比；用 libufdt 离线叠加并以原厂设备树做正对照。
 - 怎么解决：打包时导出 dtbo 引用的全部符号（或所有 base DTB 符号的并集），都指向一个 disabled 容器里的占位节点；hypervisor overlay 引用的符号（如 `arch_timer`）也要导出。
 - 提前预防：首启前完成离线叠加复现；判断交接用 `udevadm monitor` 看 USB 事件，不看 Fastboot 返回值。
-- 适用范围：高通 ABL（SM8450 之后普遍）；2026。
+- 适用范围：高通 ABL（已在多款 SM8450 之后的设备上确认；新设备先离线复现叠加行为）；2026。
 
 ### 用 dtc 的 fdtoverlay 离线复现，连原厂设备树都叠加失败
 - 现象：离线模拟得出"原厂也不行"的荒谬结论。
@@ -40,7 +40,7 @@
 - 现象一：ABL 交接后静默挂死，earlycon 上看到崩在 `persistent_ram_new`。
 - 现象二：rpmhpd、NoC、GCC 的 sync_state 一直挂起，SoC 一直跑在最高电压，idle 状态从未进入；这个问题会掩盖其他电源问题长达数周。
 - 原因：占位节点放在根下或带了 `#address-cells`/`#size-cells`/`ranges`，叠加进来的保留内存被翻译到地址 0；或者叠加后占位节点带上了 compatible 和 `status = "ok"`，成为永远不绑定的设备，fw_devlink 把它的参数当成 phandle 解析，正好命中电源提供者。
-- 怎么解决：占位节点放进 `status = "disabled"`、无 compatible、无地址属性的容器；`of/platform` 只遍历 `/reserved-memory` 的直接子节点。
+- 怎么解决：占位节点放进 `status = "disabled"`、无 compatible、无地址属性的容器（早期的保留内存解析只看 `/reserved-memory` 的直接子节点，容器里的不会被当成保留区）；检查叠加后最终的运行时设备树。
 - 提前预防：首启当天检查 `state_synced` 和 sync_state 挂起列表；解除挂起后整个电源生命周期要重测。
 - 适用范围：高通 ABL；2026。
 
@@ -49,7 +49,7 @@
 - 现象：PD mapper 打印 `no support for the platform`，声卡和远端处理器服务不出现；显示驱动的 UBWC 配置认不出 SoC，没有 `card0`；音频 quirk 永远选不中；安装器报"设备型号不符"。
 - 原因：ABL 把 dtbo 根上的 compatible、model、msm-id、board-id 覆盖到运行时设备树根上，变成平台通用名（例如 `qcom,<平台>-mtp`）。
 - 怎么确认：首启时 `cat /proc/device-tree/compatible` 与源码对比。
-- 怎么解决：内核早期恢复根身份（推荐，一处修复所有消费者）；或在各驱动匹配表加入被改写后的名字；quirk 改用不受影响的键（例如 ASoC 声卡名）；设备身份改用 Fastboot product、serial 和运行时值。
+- 怎么解决：内核早期按可信的本机信息恢复具体的板型和 SoC compatible（推荐，一处修复所有消费者）；不要只靠在驱动匹配表里加平台通用名（不同板型会误命中）；quirk 改用不受影响的键（例如 ASoC 声卡名）；设备身份改用 Fastboot product、serial 和运行时值。
 - 提前预防：凡是 bootloader 会改写的属性，都不能用来选择 quirk 或判定设备身份。
 - 适用范围：高通 ABL；2026。
 
@@ -99,7 +99,7 @@
 ### Fastboot 长时间空闲，或后台仍在写数据时，`fastboot boot` 卡住、设备不再应答
 标记：【致命】
 - 现象：屏幕停在 Fastboot，`getvar` 全无回应，只能长按电源键。
-- 原因：刷写零填充镜像时 ABL 先回 OKAY 再在后台慢速写零（可达几十分钟），期间后续命令排队或不应答；长时间空闲后的状态也不可靠。
+- 原因：在观察到的高通 ABL 上，刷写零填充镜像时先回 OKAY 再在后台慢速写零（可达几十分钟），期间后续命令排队或不应答；长时间空闲后的状态也不可靠。
 - 怎么解决：不发零填充镜像（见 `usb-and-storage.md`）；进入 Fastboot 后立即执行下一步，两步之间回到系统等待。
 - 适用范围：高通 ABL；2026。
 
@@ -133,7 +133,7 @@
 ### switch_root 交接时的连锁问题
 - 现象：telnet 接受连接后立刻断开；端口被占用；网卡名变成 `enx*`；固件请求在新根里失败，或两个根里都有固件仍偶发 `-2`；桌面运行一段时间后被旧看门狗杀掉。
 - 原因：initramfs 的孤儿进程仍占着端口；udev 给 USB 网卡改名；预建的 `/dev/console` 让条件挂载 devtmpfs 被跳过，没有 `/dev/ptmx`；固件只放在 initramfs；BusyBox `switch_root` 先删 initramfs 再接上新根，异步的固件请求落在中间的空窗；initramfs 的计时器没有撤销。
-- 怎么解决：切根前结束旧进程、在新根内重建通道；无条件挂载 devtmpfs；用 `.link` 文件按 MAC 固定网卡名；固件放在根文件系统，交接期间保证固件路径连续可见（例如先移动新根再 `chroot`）；交接时新旧保护要重叠、旧保护在新保护生效后再撤。
+- 怎么解决：切根前结束旧进程、在新根内重建通道；无条件挂载 devtmpfs；用 `.link` 文件按 MAC 固定网卡名；固件放在根文件系统，交接期间保证固件路径连续可见（例如用先 `mount --move` 新根、再切换的切根实现，同时迁移 `/dev`、`/proc`、`/sys`、`/run`）；交接时新旧保护要重叠、旧保护在新保护生效后再撤。
 - 适用范围：自写 initramfs 时通用。
 
 ### 恢复路径本身会卡住
@@ -147,7 +147,7 @@
 ### systemd 默认会去打开 hypervisor 看门狗，超时值超过硬件上限
 - 现象：普通重启或关机过程中意外复位。
 - 原因：systemd 默认 `RebootWatchdogSec=10min`，而 Gunyah 看门狗上限约 32 秒；`wdctl` 读不到 sysfs 时会打开设备。
-- 怎么解决：drop-in 设 `RuntimeWatchdogSec=off`、`RebootWatchdogSec=off`，开启 `WATCHDOG_SYSFS`；不要加 MMIO 看门狗节点（会让 SCM 放弃 hypervisor 路径）。
+- 怎么解决：产品里 drop-in 设 `RuntimeWatchdogSec=off`、`RebootWatchdogSec=off`（或都设到硬件上限以内），开启 `WATCHDOG_SYSFS`；无人值守测试时按硬件上限武装（例如 `systemd.watchdog_sec=`），作为硬挂时的回程；不要加 MMIO 看门狗节点（会让 SCM 放弃 hypervisor 路径）。
 - 适用范围：高通 Gunyah 平台；2026。
 
 ### 软件重启进不了 Fastboot，被误判为"bootloader 不支持"
