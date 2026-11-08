@@ -193,12 +193,6 @@
 - 怎么解决：清阈值或写 `charge_behaviour=auto` 时统一走同一条"重新使能充电"的路径，并让下一次轮询能自洽；两条恢复路径分别测。
 - 适用范围：自实现的充电控制；2026。
 
-### 枚举 power_supply 找电量计，`power_supply_for_each_device` 没有导出
-- 现象：驱动里用 `power_supply_for_each_device()`，链接时报未定义。
-- 原因：只导出了 `power_supply_for_each_psy()`。
-- 怎么解决：用 `power_supply_for_each_psy()` 遍历，按 `POWER_SUPPLY_TYPE_BATTERY` 且能读到 `CAPACITY` 过滤；记名字而不是指针，`power_supply_put()` 用 `devm_add_action_or_reset()` 托管。
-- 适用范围：linux 6.x；2026。
-
 ## 未解决
 
 - 私有快充的认证与协商：充电功率常低于原厂，认证时机等问题见上面的条目。

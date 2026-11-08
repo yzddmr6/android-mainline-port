@@ -182,22 +182,22 @@
 标记：【耗时】
 - 现象：自编内核在启动途中挂死，无屏幕、无串口；重启后 `journal`、`pstore`、`ktap` 里都没有那次启动的任何记录，只能确认"没进 userland"。
 - 原因：挂死发生在内核或 initramfs 里，此时所有依赖 userland 的通道都还不存在——netconsole 需要 initramfs 先把网卡拉起来，pstore 只在 panic 时落盘，`journal` 在根文件系统上；而 `fastboot boot` 是内存启动，挂死时什么分区都没写，证据随断电消失。
-- 怎么确认：在 initramfs 里放一个只依赖 BusyBox 的脚本，把"阶段名 + `/proc/uptime` + `dmesg | tail`"用 `dd` 写进裸分区；重启后从主机侧把同一段读回来。六个阶段都读得回来，即证明通道成立。
+- 怎么确认：在 initramfs 里放一个只依赖 BusyBox 的脚本，把"阶段名 + `/proc/uptime` + `dmesg | tail`"用 `dd` 写进裸分区；重启后从主机侧把同一段读回来。每个阶段都读得回来，就证明通道成立。
 - 怎么解决：
   - 选一个不参与系统挂载、几百 KB 以上的分区当黑匣子，动手前完整备份。
   - 每个阶段用固定偏移，互不覆盖；`conv=notrunc` 写完显式 `sync`（initramfs 里的 `dd` 不一定支持 `conv=fsync`）。
   - 设备节点不要硬编码：遍历 `/sys/class/block/*/uevent` 按 `PARTNAME` 匹配目标分区，节点缺失时用 `/sys/class/block/<name>/dev` 里的 `MAJOR:MINOR` 走 `mknod` 兜底；init-top 阶段 `/dev` 里不一定已经齐全。
-  - 一定把 `uptime` 一起写进去，它能直接暴露耗时黑洞：本项目据此发现 initramfs 里两个 `udevadm settle` 分别吃满 120 秒和 60 秒。
+  - 一定把 `uptime` 一起写进去，它能直接暴露耗时黑洞（例如某个 `udevadm settle` 一直等到超时）。
 - 提前预防：调试镜像与正式镜像分开打包，只换 ramdisk，内核与设备树一字不动，避免多个变量混在一起。
 - 适用范围：通用；2026。
 
-### initramfs-tools 只执行各阶段 `ORDER` 里列出的脚本，自建钩子不写进 `ORDER` 就完全不执行
-标记：【致命】【耗时】
-- 现象：把钩子放进 `scripts/init-top/`、`scripts/init-bottom/` 并 `chmod +x`，打包也成功；上机后钩子里的落盘、看门狗、日志全都没有发生，而且没有任何报错。
-- 原因：`run_scripts()` 不遍历目录，它只 `. "${initdir}/ORDER"`，按 `ORDER` 里列出的路径逐个执行。目录里存在但没被 `ORDER` 引用的脚本永远不会跑。
-- 怎么确认：读解包后的 `scripts/functions` 里 `run_scripts()` 的实现；或把同一条钩子先不加、后加进 `ORDER`，对比落盘结果。注意 `ORDER` 与实际文件可能不一致（`local-top/ORDER` 就可能是空文件）。
-- 怎么解决：加脚本时同时改对应阶段的 `ORDER`，每行一条路径，惯例后面再跟一行 `[ -e /conf/param.conf ] && . /conf/param.conf`；需要最先执行的用 `00-` 前缀。
-- 提前预防：改完 initramfs 先解包核对 `ORDER` 再打包；把"钩子会执行"当成需要实证的假设。
+### 手工修改已解包的 initramfs 时，加进去的脚本不写进 `ORDER` 就完全不执行
+标记：【耗时】
+- 现象：把脚本放进解包后的 `scripts/init-top/`、`scripts/init-bottom/` 并 `chmod +x`，重新打包也成功；上机后脚本里的落盘、看门狗、日志全都没有发生，而且没有任何报错。
+- 原因：`run_scripts()` 不遍历目录，它只 `. "${initdir}/ORDER"`，按 `ORDER` 里列出的路径逐个执行。正常用 `update-initramfs`（`mkinitramfs`）生成镜像时，`ORDER` 会按目录里的脚本自动生成；手工往已解包的镜像里加脚本再打包，`ORDER` 不会更新，没被引用的脚本永远不会跑。
+- 怎么确认：读解包后的 `scripts/functions` 里 `run_scripts()` 的实现；或把同一个脚本先不加、后加进 `ORDER`，对比落盘结果。注意 `ORDER` 与实际文件可能不一致（某个阶段的 `ORDER` 可能是空文件）。
+- 怎么解决：手工加脚本时同时改对应阶段的 `ORDER`，每行一条路径，惯例后面再跟一行 `[ -e /conf/param.conf ] && . /conf/param.conf`；要最先执行的放在 `ORDER` 的最前面。能走 `/etc/initramfs-tools/scripts/` 加 `update-initramfs` 的，就不要手工改镜像。
+- 提前预防：改完先解包核对 `ORDER` 再上机；把"脚本会执行"当成需要实证的假设。
 - 适用范围：Debian、Ubuntu 等使用 initramfs-tools 的系统；2026。
 
 ### 在 init-bottom 把 dmesg 抄进真实根，卡在交接之后的启动也能留下内核日志
