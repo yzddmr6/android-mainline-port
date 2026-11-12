@@ -4,7 +4,7 @@
 
 1. **内核**：上游 `drm/msm` 对该代 Adreno 的支持（GPU 时钟控制器、GMU、SMMU、OPP 表）。新一代 GPU 常先出现在 linux-next、高通在审系列或社区内核，按来源导入，上游合入后换成正式版本。
 2. **固件**：sqe、GMU、zap shader。零售机的安全世界通常拒绝通用签名的 zap，只能用本机原厂签名的文件；有的平台可以先走免 zap 路径验证绘制。
-3. **用户态**：先确认发行版 Mesa 是否认识这颗 GPU（看完整 chip id，不只看系列号）。不认识就自编 Mesa（编译参数跟发行版一致），装在独立前缀，用 `/etc/ld.so.conf.d/` 里排在发行版路径之前的条目加编译期默认的驱动路径让它成为系统默认，卸载即回到发行版版本；GL/EGL/GBM 和 Vulkan ICD 分别核对。环境变量只用于诊断。
+3. **用户态**：先确认发行版 Mesa 是否认识这颗 GPU（看完整 chip id，不只看系列号）。确实缺支持时，基于发行版源码包做最小修补，保留同名包、标准 multiarch 路径、GLVND 和发行版编译配置；GL/EGL/GBM 和 Vulkan ICD 分别核对。独立前缀和环境变量只用于隔离诊断，不作为宿主默认布局。替换包的更新守卫见 `ubuntu-userspace.md`。
 4. **沙箱应用**：snap 和 flatpak 用自己的 GL 库，见 `ubuntu-userspace.md`。
 5. **新 GPU 的 Mesa 不成熟**：视频纹理、多上下文、Vulkan 路径最容易出问题。跟踪上游 stable 和 main 的修复，按提交回移，并把每个回移登记为技术债，上游发版后换回。
 
@@ -23,12 +23,14 @@
 - 怎么解决：自编 Mesa 并加上设备表修复（上游通常很快有；先确认这个 revision 与已有支持项硬件兼容）；核对完整 chip id；注意别把 APT 候选版本当成已安装版本。
 - 适用范围：Adreno 8xx；2026。
 
-### 自编 Mesa 装好了，部分程序仍是软件渲染
+### 私有图形库不在标准路径，部分进程静默退回软件渲染
 标记：【高频】
-- 现象：桌面本身是硬件加速，但设置的"关于"页显卡写着 Software Rendering；sudo、pkexec 启动的图形程序是 `llvmpipe`，或报 `unsupported GPU id`。
-- 原因：自编 Mesa 装在独立前缀，只经 `environment.d` 里的 `LD_LIBRARY_PATH`、`LIBGL_DRIVERS_PATH` 选中；清空或重建环境的程序加载了发行版 Mesa，后者不认识这颗 GPU。
-- 怎么解决：`/etc/ld.so.conf.d/` 里加一个排在发行版路径之前的条目，装包和卸载时跑 `ldconfig`；驱动、GBM 后端、drirc 路径编进前缀；GL/EGL/GBM 和 Vulkan ICD 分别核对；去掉环境变量注入。用清空环境的探针、sudo、设置页、默认 Vulkan 各验一次。沙箱应用仍要自己的提供者（见 `ubuntu-userspace.md`）。
-- 适用范围：独立前缀安装的宿主 Mesa；2026。
+- 现象：桌面使用硬件加速，但清空环境的探针、提权程序、WebKit 网页进程或 VMM 的 GPU 进程使用 `llvmpipe`，也可能报 `unsupported GPU id`。
+- 原因：库搜索路径和文件系统视图是两道独立门槛。环境变量会被清除；`ldconfig` 能改变宿主搜索顺序，却不能让沙箱看见未挂载的私有目录。为单个程序补挂载只修了一个入口。
+- 怎么确认：分别在桌面会话、`env -i`、sudo/pkexec 和真实沙箱进程中核对 renderer、实际映射库与 Vulkan 枚举。沙箱绘制时把进程身份、render node、DRM client 对上，再取同一 client 的 GPU 时间差，要求 `ΔGPU time > 0`；重复 fd 指向同一 client 时去重。映射了含软件后端的 libgallium、WebGL 脱敏字符串或画面正确，都不能单独证明硬件渲染；计数器不可用时明确保留这一验证缺口。
+- 怎么解决：用发行版同名包安装到标准路径，移除旧环境注入、私有搜索路径和重复 ICD 注册，保留 GLVND；在上述各类进程环境重验。虚拟化还要核对来宾 renderer 与宿主 GPU 进程，不能用宿主桌面的计数代替。
+- 提前预防：默认图形栈按最受限的真实消费者验收，保留软件渲染负对照。此前推荐的独立前缀加 `ld.so.conf.d` 只能解决宿主搜索，不能作为沙箱兼容方案。
+- 适用范围：使用宿主库的动态链接程序及沙箱；2026。Snap、Flatpak 等自带运行时仍需各自匹配的 GPU 提供者（见 `ubuntu-userspace.md`），宿主标准路径不保证其加速。
 
 ### 文字整片消失，换软件渲染也一样：编译器误编译
 标记：【耗时】

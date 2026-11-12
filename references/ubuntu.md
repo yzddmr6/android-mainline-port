@@ -23,7 +23,7 @@
 
 规则：
 - 硬件相关的部分不依赖特定的包管理行为、显示管理器、固定账户或桌面。
-- 不修改发行版文件；必须替换时用 `dpkg-divert`，卸载即恢复。
+- 不直接覆盖发行版文件；必须修补组件时优先沿用发行版同名包和标准路径。确需逐文件替换才用 `dpkg-divert`，卸载恢复归属，并跟踪被遮住的上游文件；版本锁和 diversion 的更新检查见 `../experience/ubuntu-userspace.md`。
 - 本机唯一数据（校准、MAC、蓝牙地址、传感器配置）不进任何包，安装时从本机数据分区导入，缺失时明确报错。
 - 不做一个"大管家"包或常驻服务统管一切。
 
@@ -34,12 +34,12 @@
 | 包 | 内容 | 层 | 说明 |
 |---|---|---|---|
 | `linux-image-<版本>-<dev><ABI>` | `/boot/vmlinuz-<release>`、`/lib/modules/<release>/`（完整模块目录）、设备树放 `/usr/lib/linux-image-<release>/` | 硬件 | 布局照上游 `scripts/package/builddeb`；名字以 `linux-image` 开头，APT 才会保护它不被自动删除 |
-| `<dev>-kernel` | 只依赖当前的内核包 | 硬件 | 升级和回滚只改它 |
+| `<dev>-kernel` | 只依赖当前的内核包 | 硬件 | 负责内核版本选择；整版回退还包含用户态批次 |
 | `<dev>-firmware` | 固件文件放 `/lib/firmware/updates/`，附逐文件清单（来源、路径、哈希） | 硬件 | 不和 `linux-firmware` 抢路径；冲突用 `dpkg-divert` |
 | `<dev>-device-support` | udev 规则、设备服务（触控用户态、充电、槽成功标记）、启动镜像钩子、dracut 模块和配置、`/etc/flash-kernel/machine`、切换工具、调试通道（默认关闭）、polkit 规则 | 设备 + 集成 | 体积小，变化最频繁 |
 | `<dev>-audio`（可并入 device-support） | UCM、ALSA 拓扑文件 | 设备 | |
-| `<dev>-sensors` | 远端处理器 RPC 守护进程、传感器库、替换版 iio-sensor-proxy（`dpkg-divert`） | 设备 | 发行版版本支持后删除 |
-| `<dev>-mesa` | 新 GPU 需要的 Mesa，装在独立前缀，经 `/etc/ld.so.conf.d/` 成为系统默认（不只靠环境变量） | 设备 | 发行版 Mesa 支持后删除 |
+| `<dev>-sensors` | 远端处理器 RPC 守护进程、传感器库；需修补 iio-sensor-proxy 时依赖发行版同名替换包 | 设备 | 发行版版本支持后删除替换 |
+| `<dev>-mesa`（可选元包） | 依赖新 GPU 所需的发行版同名 Mesa 替换包，库放标准 multiarch 路径 | 设备 | 发行版满足需求后移除版本锁并恢复原包；不另放私有库副本 |
 | `<dev>-snap-graphics` | `gpu-2404` 提供者 snap 和自动连接服务 | 桌面 | 只有 snap 发行版需要 |
 | `<dev>-desktop` | GNOME 默认值（gschema override）、`/etc/xdg/monitors.xml` 缩放、电源键行为、chrony 和 fake-hwclock 配置、zram、PipeWire 上混、console-setup 修正、浏览器替换 | 桌面策略 | 换桌面时重写 |
 | `<dev>-debug` | 诊断工具、调试 shell | 可选 | 默认不装 |
@@ -121,6 +121,7 @@ filesystems+=" ext4 "
 
 - 发布附件：启动镜像包、工具包（切换、恢复、安装）、软件包包、根文件系统分卷、校验和、清单。
 - 用户升级：下载新的软件包，`apt install ./*.deb`，钩子自动重建启动镜像集，保留回滚集；以后可以提供 APT 仓库。
+- 整版回退：保留上一批精确版本的包及匹配启动组，按批次恢复用户态、包管理策略和启动镜像；仅保存启动组不能恢复用户态故障。批次与附件身份的判据见 `../experience/build-and-release.md`。
 - 安装文档写清：本机数据导入、首次设置、调试通道开关、回到 Android 的方法、风险。
 
 ## 12. 换成其他发行版时要改什么
