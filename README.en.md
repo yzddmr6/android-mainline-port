@@ -34,6 +34,7 @@ Long-form technical articles, write-ups and progress updates are on the WeChat o
 - **Assessing a new device**: whether it can be ported, which route to take, how long it will take, and which decisions the owner has to make.
 - **Following a process**: project setup, build environment, evidence collection and backup, first boot, first light and a RAM desktop, installing to storage, peripherals one at a time, release and maintenance — each step says what to do and when it counts as done.
 - **Technical decisions**: more than 40 key decision points, each with a default, "if this happens, do that" rules, the mechanism behind them, and where they do not apply — including how to compare two implementation routes, moving to a new kernel generation or sharing one kernel tree across devices, and how to take community contributions.
+- **Stateful control subsystems**: for charging, display power, suspend hand-over and thermal control, where the AP runs a control loop together with firmware and hardware — when to stop patching symptoms, how to build one model, have it attacked, and accept it by a case matrix and complete real-condition runs.
 - **Debugging**: eleven common problem patterns with generic steps, then concrete pitfalls by area; error strings, function names and config options in your logs can be searched directly.
 - **Taking over midway**: which documents must be kept and how technical debt is recorded, so the next person or agent can continue from the documents alone.
 - **Working with the owner and with AI executors**: which decisions you make yourself and which go to the owner, how to spend as little of the owner's time as possible, and how to brief sub-agents without outsourcing the thinking.
@@ -153,6 +154,7 @@ references/
   discipline.md                  what to document, technical debt, directory layout, attribution, estimation, sub-agents
   build-environment.md           host, toolchain, ccache, OUT dirs, root filesystem builds, caching
   decisions.md                   key decisions: defaults, condition → action rules, mechanism, limits
+  control-models.md              modelling, review and acceptance for stateful control subsystems
   verification.md                status words, evidence, cold boots, test automation, performance budgets
   ubuntu.md                      Ubuntu layering and decoupling, package split, boot hooks, other distros
 experience/
